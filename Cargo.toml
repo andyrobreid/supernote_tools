@@ -9,10 +9,6 @@ license = "MIT"
 name = "supernote-tools"
 path = "src/main.rs"
 
-[[bin]]
-name = "supernote-sync"
-path = "src/main.rs"
-
 [dependencies]
 anyhow = "1.0.98"
 chrono = { version = "0.4.41", features = ["clock", "serde"] }

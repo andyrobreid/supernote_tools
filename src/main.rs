@@ -129,15 +129,7 @@ fn sync_files(cli: &Cli, mode: &str, normalize_text_whitespace: bool) -> Result<
     fs::create_dir_all(&cli.out)?;
 
     let state_path = cli.out.join(".supernote-tools-state.json");
-    let legacy_state_path = cli.out.join(".supernote-sync-state.json");
-    let mut state = if state_path.exists() {
-        load_state(&state_path)?
-    } else if legacy_state_path.exists() {
-        println!("Using legacy state file {}", legacy_state_path.display());
-        load_state(&legacy_state_path)?
-    } else {
-        SyncState::default()
-    };
+    let mut state = load_state(&state_path)?;
 
     let current_ids: HashSet<String> = files.iter().map(|f| f.id.clone()).collect();
     state.files.retain(|id, _| current_ids.contains(id));

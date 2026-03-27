@@ -31,7 +31,6 @@ Use `supernote-tools` as your standalone sync/conversion backbone, and `supernot
 
 ```bash
 cd /home/andyrobreid/dev/supernote-sync
-# package/binary name is now supernote-tools (legacy supernote-sync binary still available)
 cargo build --release
 ```
 
@@ -67,6 +66,4 @@ Tracks file metadata in:
 
 - `./output/.supernote-tools-state.json`
 
-Legacy state file `./output/.supernote-sync-state.json` is auto-read if present.
-
-Used for incremental sync.
+Used for incremental runs.

@@ -1,17 +1,21 @@
 # supernote-sync
 
-Standalone CLI (with TUI roadmap) to sync Supernote `.note` files without Obsidian.
+Standalone CLI (with TUI roadmap) to sync Supernote content without Obsidian.
 
-## Features (MVP)
+## What it syncs
 
-- Connects to Supernote Browse & Access HTTP API (`:8089`)
-- Recursively scans `/Note`
-- Detects changed/new notes via local state file
-- Downloads `.note` files
-- Invokes `supernote_pdf` for conversion
-  - `pdf`
-  - `pdf-and-markdown`
-  - `markdown-only`
+- `.note` files (keeps raw `.note`, plus converted outputs)
+- `.txt` files (synced as plain text)
+- `.pdf` files (synced as-is)
+
+Scans both `/Note` and `/Document` where available, preserving folder structure under your output root.
+
+## .note conversion modes
+
+- `auto` (default): PDF always, Markdown only when recognized text exists
+- `pdf`
+- `pdf-and-markdown`
+- `markdown-only`
 
 ## Build
 
@@ -22,42 +26,34 @@ cargo build --release
 
 ## Usage
 
-Scan device notes:
+Scan supported files:
 
 ```bash
 cargo run --release -- --host 192.168.86.26 --port 8089 --out ./output scan
 ```
 
-Sync in markdown-only mode:
+Smart sync (default mode):
+
+```bash
+cargo run --release -- --host 192.168.86.26 --port 8089 --out ./output sync --mode auto --normalize-text-whitespace
+```
+
+Force markdown-only for `.note` files:
 
 ```bash
 cargo run --release -- --host 192.168.86.26 --port 8089 --out ./output sync --mode markdown-only --normalize-text-whitespace
 ```
 
-Sync in pdf-and-markdown mode:
+## Converter binary naming
 
-```bash
-cargo run --release -- --host 192.168.86.26 --port 8089 --out ./output sync --mode pdf-and-markdown --normalize-text-whitespace
-```
+The converter project now prefers `supernote_sync` as the CLI name, with `supernote_pdf` kept for compatibility.
 
-TUI placeholder:
-
-```bash
-cargo run --release -- --host 192.168.86.26 tui
-```
+This tool still accepts `--supernote-pdf-bin` for backward compatibility.
 
 ## State
 
-Tracks note metadata in:
+Tracks file metadata in:
 
 - `./output/.supernote-sync-state.json`
 
-This powers incremental sync.
-
-## Next roadmap
-
-- Real ratatui dashboard
-- Selection filters
-- Per-note diff summary
-- Cron/watch mode
-- Parallel conversion queue
+Used for incremental sync.

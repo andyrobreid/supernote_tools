@@ -1,5 +1,4 @@
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use regex::Regex;
 use reqwest::blocking::Client;
@@ -10,7 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Sync Supernote .note files to local files without Obsidian")]
+#[command(
+    version,
+    about = "Sync Supernote files (.note/.txt/.pdf) to local files"
+)]
 struct Cli {
     /// Supernote device host/IP
     #[arg(long, default_value = "192.168.86.26")]
@@ -24,7 +26,7 @@ struct Cli {
     #[arg(long, default_value = "./output")]
     out: PathBuf,
 
-    /// Path to supernote_pdf binary
+    /// Path to supernote_pdf binary (legacy name retained for compatibility)
     #[arg(long, default_value = "supernote_pdf")]
     supernote_pdf_bin: String,
 
@@ -34,15 +36,15 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// List notes discovered on the Supernote device
+    /// List supported files discovered on the Supernote device
     Scan,
-    /// Sync notes to local output directory
+    /// Sync supported files to local output directory
     Sync {
-        /// Output mode: pdf, pdf-and-markdown, markdown-only
-        #[arg(long, default_value = "markdown-only")]
+        /// Output mode for .note files: auto, pdf, pdf-and-markdown, markdown-only
+        #[arg(long, default_value = "auto")]
         mode: String,
 
-        /// Pass --normalize-text-whitespace to supernote_pdf
+        /// Pass --normalize-text-whitespace to supernote_pdf when markdown is involved
         #[arg(long, default_value_t = true)]
         normalize_text_whitespace: bool,
     },
@@ -66,17 +68,25 @@ struct DeviceFile {
     is_directory: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+enum FileKind {
+    Note,
+    Text,
+    Pdf,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct NoteMeta {
+struct RemoteFileMeta {
     id: String,
     uri: String,
     date: String,
     size: u64,
+    kind: FileKind,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct SyncState {
-    notes: HashMap<String, NoteMeta>,
+    files: HashMap<String, RemoteFileMeta>,
 }
 
 fn main() -> Result<()> {
@@ -84,26 +94,26 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Scan => {
-            let notes = fetch_all_notes(&cli.host, cli.port)?;
-            println!("Found {} note files", notes.len());
-            for n in notes.iter().take(20) {
-                println!("{}  {}  {}", n.id, n.date, n.uri);
+            let files = fetch_all_supported_files(&cli.host, cli.port)?;
+            println!("Found {} supported files", files.len());
+            for f in files.iter().take(30) {
+                println!("{:?}  {}  {}", f.kind, f.date, f.uri);
             }
-            if notes.len() > 20 {
-                println!("... ({} more)", notes.len() - 20);
+            if files.len() > 30 {
+                println!("... ({} more)", files.len() - 30);
             }
         }
         Commands::Sync {
             ref mode,
             normalize_text_whitespace,
         } => {
-            sync_notes(&cli, mode, normalize_text_whitespace)?;
+            sync_files(&cli, mode, normalize_text_whitespace)?;
         }
         Commands::Tui => {
             println!("supernote-sync TUI (MVP)\n");
             println!("This mode is scaffolded. Next steps:");
             println!("1) live device status panel");
-            println!("2) selectable note list with changed/new badges");
+            println!("2) selectable file list with changed/new badges");
             println!("3) one-key sync trigger");
             println!("4) live conversion logs");
         }
@@ -112,81 +122,56 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn sync_notes(cli: &Cli, mode: &str, normalize_text_whitespace: bool) -> Result<()> {
-    let notes = fetch_all_notes(&cli.host, cli.port)?;
+fn sync_files(cli: &Cli, mode: &str, normalize_text_whitespace: bool) -> Result<()> {
+    validate_mode(mode)?;
+
+    let files = fetch_all_supported_files(&cli.host, cli.port)?;
     fs::create_dir_all(&cli.out)?;
 
     let state_path = cli.out.join(".supernote-sync-state.json");
     let mut state = load_state(&state_path)?;
 
-    let current_ids: HashSet<String> = notes.iter().map(|n| n.id.clone()).collect();
-    state.notes.retain(|id, _| current_ids.contains(id));
+    let current_ids: HashSet<String> = files.iter().map(|f| f.id.clone()).collect();
+    state.files.retain(|id, _| current_ids.contains(id));
 
     let mut changed = Vec::new();
-    for note in &notes {
+    for file in &files {
         let needs = state
-            .notes
-            .get(&note.id)
-            .map(|old| old.date != note.date || old.size != note.size)
+            .files
+            .get(&file.id)
+            .map(|old| old.date != file.date || old.size != file.size || old.kind != file.kind)
             .unwrap_or(true);
         if needs {
-            changed.push(note.clone());
+            changed.push(file.clone());
         }
     }
 
-    println!("{} notes discovered; {} changed/new", notes.len(), changed.len());
+    println!(
+        "{} files discovered; {} changed/new",
+        files.len(),
+        changed.len()
+    );
 
-    for note in changed {
-        println!("Syncing {}", note.uri);
-        let note_bytes = download_note(&cli.host, cli.port, &note.uri)?;
+    for file in changed {
+        println!("Syncing {}", file.uri);
 
-        let rel = note.uri.trim_start_matches("/Note/");
-        let note_local_path = cli.out.join(rel);
-        if let Some(parent) = note_local_path.parent() {
+        let bytes = download_file(&cli.host, cli.port, &file.uri)?;
+        let local_raw_path = cli.out.join(file.uri.trim_start_matches('/'));
+        if let Some(parent) = local_raw_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&note_local_path, &note_bytes)?;
+        fs::write(&local_raw_path, &bytes)?;
 
-        let mut output = note_local_path.clone();
-        match mode {
-            "pdf" => {
-                output.set_extension("pdf");
-            }
-            "pdf-and-markdown" => {
-                output.set_extension("pdf");
-            }
-            "markdown-only" => {
-                output.set_extension("md");
-            }
-            other => bail!("unsupported mode: {other}"),
+        if file.kind == FileKind::Note {
+            run_note_conversion(
+                &cli.supernote_pdf_bin,
+                mode,
+                normalize_text_whitespace,
+                &local_raw_path,
+            )?;
         }
 
-        let mut cmd = Command::new(&cli.supernote_pdf_bin);
-        cmd.arg("--input").arg(&note_local_path).arg("--output").arg(&output);
-
-        match mode {
-            "pdf" => {}
-            "pdf-and-markdown" => {
-                cmd.arg("--pdf-and-markdown");
-                if normalize_text_whitespace {
-                    cmd.arg("--normalize-text-whitespace");
-                }
-            }
-            "markdown-only" => {
-                cmd.arg("--markdown-only");
-                if normalize_text_whitespace {
-                    cmd.arg("--normalize-text-whitespace");
-                }
-            }
-            _ => unreachable!(),
-        }
-
-        let status = cmd.status().context("failed to launch supernote_pdf")?;
-        if !status.success() {
-            bail!("supernote_pdf failed for {}", note.uri);
-        }
-
-        state.notes.insert(note.id.clone(), note);
+        state.files.insert(file.id.clone(), file);
     }
 
     save_state(&state_path, &state)?;
@@ -194,31 +179,130 @@ fn sync_notes(cli: &Cli, mode: &str, normalize_text_whitespace: bool) -> Result<
     Ok(())
 }
 
-fn fetch_all_notes(host: &str, port: u16) -> Result<Vec<NoteMeta>> {
+fn run_note_conversion(
+    supernote_pdf_bin: &str,
+    mode: &str,
+    normalize_text_whitespace: bool,
+    note_local_path: &Path,
+) -> Result<()> {
+    let mut output = note_local_path.to_path_buf();
+    match mode {
+        "pdf" | "pdf-and-markdown" | "auto" => {
+            output.set_extension("pdf");
+        }
+        "markdown-only" => {
+            output.set_extension("md");
+        }
+        _ => unreachable!(),
+    }
+
+    let mut cmd = Command::new(supernote_pdf_bin);
+    cmd.arg("--input")
+        .arg(note_local_path)
+        .arg("--output")
+        .arg(&output);
+
+    match mode {
+        "pdf" => {}
+        "pdf-and-markdown" => {
+            cmd.arg("--pdf-and-markdown");
+            if normalize_text_whitespace {
+                cmd.arg("--normalize-text-whitespace");
+            }
+        }
+        "markdown-only" => {
+            cmd.arg("--markdown-only");
+            if normalize_text_whitespace {
+                cmd.arg("--normalize-text-whitespace");
+            }
+        }
+        "auto" => {
+            cmd.arg("--auto-output");
+            if normalize_text_whitespace {
+                cmd.arg("--normalize-text-whitespace");
+            }
+        }
+        _ => unreachable!(),
+    }
+
+    let status = cmd.status().context("failed to launch supernote_pdf")?;
+    if !status.success() {
+        bail!("supernote_pdf failed for {}", note_local_path.display());
+    }
+
+    Ok(())
+}
+
+fn validate_mode(mode: &str) -> Result<()> {
+    match mode {
+        "auto" | "pdf" | "pdf-and-markdown" | "markdown-only" => Ok(()),
+        other => bail!("unsupported mode: {other}"),
+    }
+}
+
+fn fetch_all_supported_files(host: &str, port: u16) -> Result<Vec<RemoteFileMeta>> {
     let client = Client::builder().build()?;
-    let mut stack = vec!["/Note".to_string()];
     let mut notes = Vec::new();
 
+    for root in ["/Note", "/Document"] {
+        let fetched = fetch_supported_files_under_root(&client, host, port, root)?;
+        notes.extend(fetched);
+    }
+
+    notes.sort_by(|a, b| b.date.cmp(&a.date));
+    notes.dedup_by(|a, b| a.uri == b.uri);
+    Ok(notes)
+}
+
+fn fetch_supported_files_under_root(
+    client: &Client,
+    host: &str,
+    port: u16,
+    root: &str,
+) -> Result<Vec<RemoteFileMeta>> {
+    let mut stack = vec![root.to_string()];
+    let mut out = Vec::new();
+
     while let Some(path) = stack.pop() {
-        let body = get_html(&client, host, port, &path)?;
+        let body = match get_html(client, host, port, &path) {
+            Ok(body) => body,
+            Err(e) => {
+                if path == root {
+                    eprintln!("Skipping '{}' (unavailable): {}", root, e);
+                    break;
+                }
+                return Err(e);
+            }
+        };
+
         let parsed = parse_embedded_json(&body)?;
 
         for f in parsed.file_list {
             if f.is_directory {
                 stack.push(f.uri);
-            } else if f.extension.as_deref() == Some("note") {
-                notes.push(NoteMeta {
+                continue;
+            }
+
+            let kind = match f.extension.as_deref() {
+                Some("note") => Some(FileKind::Note),
+                Some("txt") => Some(FileKind::Text),
+                Some("pdf") => Some(FileKind::Pdf),
+                _ => None,
+            };
+
+            if let Some(kind) = kind {
+                out.push(RemoteFileMeta {
                     id: stable_id(&f.uri),
                     uri: f.uri,
                     date: f.date,
                     size: f.size,
+                    kind,
                 });
             }
         }
     }
 
-    notes.sort_by(|a, b| b.date.cmp(&a.date));
-    Ok(notes)
+    Ok(out)
 }
 
 fn get_html(client: &Client, host: &str, port: u16, path: &str) -> Result<String> {
@@ -243,7 +327,7 @@ fn parse_embedded_json(html: &str) -> Result<DeviceResponse> {
     Ok(parsed)
 }
 
-fn download_note(host: &str, port: u16, uri: &str) -> Result<Vec<u8>> {
+fn download_file(host: &str, port: u16, uri: &str) -> Result<Vec<u8>> {
     let encoded = uri
         .split('/')
         .map(|seg| {
@@ -280,11 +364,4 @@ fn save_state(path: &Path, state: &SyncState) -> Result<()> {
     let data = serde_json::to_string_pretty(state)?;
     fs::write(path, data)?;
     Ok(())
-}
-
-#[allow(dead_code)]
-fn _parse_device_date(date: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_str(&(date.to_string() + ":00 +0000"), "%Y-%m-%d %H:%M:%S %z")
-        .ok()
-        .map(|d| d.with_timezone(&Utc))
 }

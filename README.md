@@ -1,6 +1,8 @@
 # supernote-tools
 
-Standalone CLI (with TUI roadmap) to sync Supernote content without Obsidian.
+Standalone sync toolkit (CLI today, TUI roadmap) for Supernote content.
+
+It is fully standalone. If your workflow is Obsidian-centric, `supernote-companion` is an optional companion plugin rather than a requirement.
 
 ## What it syncs
 
@@ -9,6 +11,14 @@ Standalone CLI (with TUI roadmap) to sync Supernote content without Obsidian.
 - `.pdf` files (synced as-is)
 
 Scans both `/Note` and `/Document` where available, preserving folder structure under your output root.
+
+## Obsidian workflow (optional)
+
+If you use Obsidian, you can pair this with the `supernote-companion` plugin:
+
+- https://github.com/andyrobreid/supernote-companion
+
+Use `supernote-tools` as your standalone sync/conversion backbone, and `supernote-companion` as an Obsidian-native workflow option.
 
 ## .note conversion modes
 

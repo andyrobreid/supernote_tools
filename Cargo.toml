@@ -1,9 +1,17 @@
 [package]
-name = "supernote-sync"
+name = "supernote-tools"
 version = "0.1.0"
 edition = "2024"
-description = "Standalone CLI/TUI sync tool for Supernote notes"
+description = "Standalone CLI/TUI/library toolkit for Supernote notes"
 license = "MIT"
+
+[[bin]]
+name = "supernote-tools"
+path = "src/main.rs"
+
+[[bin]]
+name = "supernote-sync"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.98"

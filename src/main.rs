@@ -110,7 +110,7 @@ fn main() -> Result<()> {
             sync_files(&cli, mode, normalize_text_whitespace)?;
         }
         Commands::Tui => {
-            println!("supernote-sync TUI (MVP)\n");
+            println!("supernote-tools TUI (MVP)\n");
             println!("This mode is scaffolded. Next steps:");
             println!("1) live device status panel");
             println!("2) selectable file list with changed/new badges");
@@ -128,8 +128,16 @@ fn sync_files(cli: &Cli, mode: &str, normalize_text_whitespace: bool) -> Result<
     let files = fetch_all_supported_files(&cli.host, cli.port)?;
     fs::create_dir_all(&cli.out)?;
 
-    let state_path = cli.out.join(".supernote-sync-state.json");
-    let mut state = load_state(&state_path)?;
+    let state_path = cli.out.join(".supernote-tools-state.json");
+    let legacy_state_path = cli.out.join(".supernote-sync-state.json");
+    let mut state = if state_path.exists() {
+        load_state(&state_path)?
+    } else if legacy_state_path.exists() {
+        println!("Using legacy state file {}", legacy_state_path.display());
+        load_state(&legacy_state_path)?
+    } else {
+        SyncState::default()
+    };
 
     let current_ids: HashSet<String> = files.iter().map(|f| f.id.clone()).collect();
     state.files.retain(|id, _| current_ids.contains(id));
